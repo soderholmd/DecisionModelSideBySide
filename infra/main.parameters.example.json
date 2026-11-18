@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "swedencentral" },
+    "environmentName": { "value": "<unique-environment-name>" },
+    "sessionId": { "value": "<deployment-session-guid>" },
+    "deployedBy": { "value": "demo-owner" },
+    "createdAt": { "value": "<deployment-created-utc>" },
+    "resourceGroupName": { "value": "<dedicated-resource-group-name>" },
+    "environmentResourceName": { "value": "<container-apps-environment-name>" },
+    "appName": { "value": "<container-app-name>" },
+    "registryName": { "value": "<globally-unique-registry-name>" },
+    "modelAccountName": { "value": "<globally-unique-model-account-name>" },
+    "identityName": { "value": "<managed-identity-name>" },
+    "workspaceName": { "value": "<log-analytics-workspace-name>" },
+    "tenantId": { "value": "<entra-tenant-guid>" },
+    "allowedUserObjectId": { "value": "<approved-user-object-guid>" },
+    "policyAssignmentId": { "value": "<approved-public-endpoint-policy-assignment-resource-id>" },
+    "exemptionExpiresOn": { "value": "<approved-fixed-waiver-expiry-utc>" }
+  }
+}

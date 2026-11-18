@@ -16,7 +16,7 @@ import requests
 from pricing import estimate_cost, mock_cost
 
 DECISION_PATH = "/providers/microsoft/v1/systemone"
-DECISION_TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
+TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
 QUESTION_NAME = "category"
 
 # Reuse connections across calls, like the OpenAI client does.
@@ -28,7 +28,7 @@ def _env(name, default=""):
 
 
 REQUIRED_SETTINGS = {
-    "openai": ["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_DEPLOYMENT"],
+    "openai": ["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT"],
     # DECISION_API_KEY is optional: without it, Microsoft Entra ID (DefaultAzureCredential) is used.
     "decision": ["DECISION_ENDPOINT", "DECISION_DEPLOYMENT"],
 }
@@ -113,12 +113,20 @@ def _mock(text, labels):
 
 @functools.lru_cache(maxsize=1)
 def _openai_client():
+    from azure.identity import get_bearer_token_provider
     from openai import AzureOpenAI
 
+    api_key = _env("AZURE_OPENAI_API_KEY")
+    if api_key:
+        authentication = {"api_key": api_key}
+    else:
+        authentication = {
+            "azure_ad_token_provider": get_bearer_token_provider(_entra_credential(), TOKEN_SCOPE)
+        }
     return AzureOpenAI(
         azure_endpoint=_env("AZURE_OPENAI_ENDPOINT"),
-        api_key=_env("AZURE_OPENAI_API_KEY"),
         api_version=_env("AZURE_OPENAI_API_VERSION", "2024-10-21"),
+        **authentication,
     )
 
 
@@ -164,7 +172,7 @@ def _decision_headers():
     if api_key:
         headers["api-key"] = api_key
     else:
-        token = _entra_credential().get_token(DECISION_TOKEN_SCOPE).token
+        token = _entra_credential().get_token(TOKEN_SCOPE).token
         headers["Authorization"] = "Bearer " + token
     return headers
 

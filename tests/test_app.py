@@ -35,8 +35,11 @@ def test_scenarios_have_data_and_labels(key):
 
 def test_config_and_data_endpoints(client):
     config = client.get("/api/config").get_json()
-    assert set(config["scenarios"]) == {"customer", "expenses"}
-    assert client.get("/api/data/expenses").get_json()["items"]
+    assert set(config["scenarios"]) == {"customer", "expenses", "students", "symptoms", "incidents"}
+    for key in config["scenarios"]:
+        response = client.get(f"/api/data/{key}")
+        assert response.status_code == 200
+        assert response.get_json()["items"]
     assert client.get("/api/data/nope").status_code == 404
 
 
@@ -91,6 +94,46 @@ def test_request_body_size_is_limited(client):
 def test_match_label():
     assert classifiers.match_label("technical support.", LABELS) == "Technical Support"
     assert classifiers.match_label("Label: Other", LABELS) == "Other"
+
+
+@pytest.mark.parametrize("use_api_key", [False, True])
+def test_openai_authentication(monkeypatch, use_api_key):
+    import azure.identity
+    import openai
+
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "my-deployment")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key" if use_api_key else "")
+    monkeypatch.delenv("MOCK_MODELS", raising=False)
+    credential = object()
+    token_provider = lambda: "entra-token"
+    calls = []
+
+    def fake_token_provider(actual_credential, scope):
+        assert not use_api_key
+        assert actual_credential is credential
+        assert scope == "https://cognitiveservices.azure.com/.default"
+        return token_provider
+
+    def fake_client(**kwargs):
+        calls.append(kwargs)
+        return "client"
+
+    monkeypatch.setattr(classifiers, "_entra_credential", lambda: credential)
+    monkeypatch.setattr(azure.identity, "get_bearer_token_provider", fake_token_provider)
+    monkeypatch.setattr(openai, "AzureOpenAI", fake_client)
+    classifiers._openai_client.cache_clear()
+    try:
+        assert classifiers.missing_settings("openai") == []
+        assert classifiers._openai_client() == "client"
+    finally:
+        classifiers._openai_client.cache_clear()
+    if use_api_key:
+        assert calls[0]["api_key"] == "test-key"
+        assert "azure_ad_token_provider" not in calls[0]
+    else:
+        assert calls[0]["azure_ad_token_provider"] is token_provider
+        assert "api_key" not in calls[0]
 
 
 def test_classify_openai_uses_model_default_temperature(monkeypatch, client):

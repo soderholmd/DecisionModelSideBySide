@@ -151,6 +151,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -218,3 +220,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local deployment state and environment-specific parameters
+.copilot-azure/
+/infra/main.parameters.json
+/infra/*.parameters.local.json
+deploy-secrets.env
+
+# Private keys and credential bundles
+*.key
+*.pem
+*.pfx
+*.p12

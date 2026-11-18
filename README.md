@@ -10,12 +10,29 @@ For each side the UI shows the prompt/request being executed, plus a single row 
 
 ## Scenarios
 
-Switch between two built-in scenarios using the **Scenario** dropdown. Each has its own default labels (defined in [`scenarios.py`](scenarios.py)) and its own sample data file:
+Switch between five built-in scenarios using the **Scenario** dropdown. Each has its own default labels (defined in [`scenarios.py`](scenarios.py)) and its own sample data file:
 
 | Scenario | Data file | Default labels |
 | --- | --- | --- |
 | Customer questions & complaints | [`data/customer/data.config`](data/customer/data.config) | Sales - New Purchase, Sales - Product Comparison, Billing & Licensing, Technical Support, Account & Access, Feedback & Complaints, Other |
 | Expense report classification | [`data/expenses/data.config`](data/expenses/data.config) | Lodging, Airfare, Ground Transportation, Car Rental, Meals & Entertainment, Office Supplies & Equipment, Software & Subscriptions, Conferences & Training, Communications, Other |
+| Student enquiry routing | [`data/students/data.config`](data/students/data.config) | Admissions, Fees & Funding, Accommodation, Timetabling, IT Support, Wellbeing, Other |
+| Mild illness symptom examples (fictional) | [`data/symptoms/data.config`](data/symptoms/data.config) | Common Cold-like Symptoms, Seasonal Allergy-like Symptoms, Tension Headache-like Symptoms, Indigestion-like Symptoms, Motion Sickness-like Symptoms, Unclear / Insufficient Information |
+| Police incident log categories (fictional) | [`data/incidents/data.config`](data/incidents/data.config) | Theft, Burglary, Criminal Damage, Fraud, Public Disorder, Unclear / Insufficient Information |
+
+The student enquiry scenario contains 28 fictional messages, including
+cross-team cases such as an admissions portal login failure or a request for
+hardship funding. Route by the main help requested, not by isolated keywords.
+This is not a tool for admissions decisions or wellbeing triage; do not upload
+real student records or personal details.
+
+The symptom and incident scenarios each contain 24 entirely fictional examples,
+including ambiguous reports. Symptom categories are illustrative patterns, **not
+diagnoses or triage**: overlapping symptoms cannot establish an illness or rule
+out serious causes. Seek professional advice for real health concerns. Incident
+categories describe allegations, **not findings of guilt or legal determinations**;
+definitions vary by jurisdiction and ambiguous reports require human review.
+Do not upload real patient details or identifiable police records to this demo.
 
 Labels can be added and removed in the UI before a run; **Reset to defaults** (or switching scenarios) restores the defaults.
 `data.config` files contain one item per line; blank lines and lines starting with `#` are ignored, so you can edit them freely.
@@ -60,7 +77,7 @@ The response's `answers.category.choice` is mapped back to the label name.
    | Setting | Description |
    | --- | --- |
    | `AZURE_OPENAI_ENDPOINT` | Your Azure OpenAI endpoint, e.g. `https://<resource>.openai.azure.com/` |
-   | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
+   | `AZURE_OPENAI_API_KEY` | Optional Azure OpenAI API key. Leave empty for Microsoft Entra ID (`az login` locally or managed identity in Azure); the identity needs *Cognitive Services OpenAI User* on the resource |
    | `AZURE_OPENAI_DEPLOYMENT` | Name of your chat model deployment (e.g. `gpt-4o-mini`) |
    | `AZURE_OPENAI_API_VERSION` | API version (default `2024-10-21`) |
    | `DECISION_ENDPOINT` | Your Foundry resource endpoint; the app calls `<endpoint>/providers/microsoft/v1/systemone` |
@@ -68,6 +85,7 @@ The response's `answers.category.choice` is mapped back to the label name.
    | `DECISION_DEPLOYMENT` | Name of your Microsoft-Decision-1 deployment (the deployment name, not the model name) |
    | `MOCK_MODELS` | Set to `true` to try the UI without any Azure resources (simulated classifiers and latency) |
    | `PORT` | Port to listen on (default `5000`) |
+   | `AZURE_CLIENT_ID` | Optional client ID of a user-assigned managed identity; leave unset when using your local Azure CLI identity |
 
 3. Run the app and open <http://127.0.0.1:5000>:
 
@@ -77,7 +95,91 @@ The response's `answers.category.choice` is mapped back to the label name.
 
 4. Pick a scenario, adjust the labels if you like, and press **Run**.
 
+For keyless local access, run `az login` and leave both API-key settings empty.
+Your identity needs **Cognitive Services OpenAI User** for chat inference and
+**Cognitive Services User** for Decision inference on the model resource.
+Authentication does not bypass network restrictions: private-only model
+resources still require an approved network path and working private DNS.
+
+## Authenticated, policy-aware Azure hosting
+
+The `infra` deployment path is separate from the public demo script below. It
+uses Microsoft Entra sign-in restricted to the configured user, managed identity
+for model calls and registry pulls, and disabled model API keys.
+
+The Windows/PowerShell 7 deployment script defaults to a read-only infrastructure
+what-if preview. Azure CLI must be signed in as the configured user and have
+Bicep installed. The preview uses illustrative application/image values; it
+does not create resources, a directory application, or credentials:
+
+```powershell
+pwsh -File .\infra\deploy.ps1
+```
+
+Only after reviewing the target, costs, and policy exemption scope, explicitly
+request provisioning:
+
+```powershell
+pwsh -File .\infra\deploy.ps1 -Deploy
+```
+
+Provisioning builds the runtime-only Docker context in ACR, deploys the real
+image with internal ingress, verifies the single-user authentication settings,
+and only then enables public ingress. No Container Apps CLI extension is needed.
+Afterward, sign in and run a classification with **both** models: `/healthz`
+checks the web server, not model permissions, connectivity, or inference.
+
+Nonsecret directory object/credential IDs are recorded in the ignored deployment
+session folder. Keep this state for retries. The script reuses the existing
+Container Apps secret without extending its expiry. If provisioning stops after
+creating the directory credential but before saving it in Container Apps,
+recovery needs an explicitly approved credential replacement; the script will
+not silently rotate it. A failed deployment can leave billable resources behind.
+
+Application deployment uses only the app/auth Bicep module, so it does not
+reapply the policy waiver or model resources. To resume an unchanged successful
+foundation with an already-built image:
+
+```powershell
+pwsh -File .\infra\deploy.ps1 -Deploy -Resume -ResumeImageTag demo:1795022709
+```
+
+Resume verifies the foundation template fingerprint, target parameters and
+existing exact waiver before deploying. It does not rebuild the image. Only
+after separately approving replacement of an unrecoverable web credential,
+add `-RecoverWebCredential`: this removes only the recorded credential from the
+matching app registration and generates a new 30-day replacement. Do not use
+that switch when the credential is still recoverable from Container Apps.
+Neither resume nor credential recovery extends the policy waiver.
+
+The environment-specific `infra/main.parameters.json`, `.env` variants,
+deployment session state and private key files are ignored by Git. Keep them
+local; do not force-add them. Commit `infra/main.parameters.example.json`
+instead. For a fresh checkout, copy that example to `infra/main.parameters.json`
+and replace every placeholder with reviewed, approved values. Pass your
+subscription explicitly with `-SubscriptionId`; do not reuse another
+environment's identifiers or extend an existing waiver on a retry.
+
+Review the nonsecret infrastructure parameters before using this path in
+another subscription. The proposed demo uses GPT-5.2 versus
+Microsoft-Decision-1.1 with Global Standard deployments and one warm
+1-vCPU/2-GiB replica. Global Standard does not guarantee inference stays in the
+resource's region. Compare observed latency and label quality; a larger model
+is not guaranteed to be slower, and this setup adds no artificial delays.
+
+Public access requires governance approval even when a policy assignment is
+not enforcing. Any waiver must be limited to the demo resource group and the
+specific applicable policy definitions. A 30-day exemption **does not** delete
+resources, disable endpoints, or stop charges when it expires. Review the
+exemption and the separate web sign-in secret expiry before the next demo.
+Deleting the dedicated demo resource group also deletes its model deployments;
+the Entra app registration is a separate directory object and requires separate
+cleanup.
+
 ## Run in Azure Container Apps
+
+**This legacy path creates an unauthenticated public URL.** Do not use it when
+you require Entra sign-in or policy exemptions; use the authenticated path above.
 
 The demo can run entirely in Azure; only the UI runs in your browser. The
 deployment script builds the Linux image in Azure Container Registry (no local
@@ -270,6 +372,12 @@ Mock runs, unknown models without overrides, and missing or invalid usage show
 
 ```bash
 python -m pytest
+```
+
+Infrastructure safety checks on Windows (PowerShell 7; Azure calls are mocked):
+
+```powershell
+pwsh -NoProfile -File .\tests\test_infra.ps1
 ```
 
 UI behavior tests (requires Node.js):
