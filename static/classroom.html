@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Classroom | Decision Model Side-by-Side</title>
+  <link rel="stylesheet" href="/static/classroom.css">
+  <script src="/static/classroom.js" defer></script>
+</head>
+<body>
+  <header class="page-header">
+    <a class="brand" href="/compare">AI decisions, side by side</a>
+    <nav aria-label="Demo views">
+      <a href="/compare">One decision</a>
+      <a href="/consistency">Does it stick?</a>
+      <a href="/">Under the hood</a>
+    </nav>
+  </header>
+  <main>
+    <section class="intro">
+      <p class="eyebrow">A classroom experiment</p>
+      <h1 id="page-title">One decision, two approaches</h1>
+      <p id="page-intro">The same enquiry. The same categories. How do the models compare?</p>
+      <p id="mock-notice" class="notice" hidden><strong>Simulation mode.</strong> No real models are called. Choices are keyword-based and timings are simulated; this is not evidence of model performance or consistency.</p>
+      <p id="page-error" class="error" role="alert" hidden></p>
+    </section>
+
+    <section class="input-card" aria-labelledby="input-title">
+      <h2 id="input-title">An enquiry arrives</h2>
+      <div class="toolbar">
+        <label for="scenario">Scenario</label>
+        <select id="scenario" disabled></select>
+        <label for="example">Example</label>
+        <select id="example" disabled></select>
+      </div>
+      <label id="enquiry-label" for="enquiry">Read it aloud, then predict the category.</label>
+      <textarea id="enquiry" rows="3" maxlength="4000" disabled></textarea>
+      <p id="scenario-note" class="small"></p>
+      <div id="experiment-controls" class="toolbar" hidden>
+        <label for="experiment">Experiment</label>
+        <select id="experiment" disabled>
+          <option value="repeat">Repeat exactly</option>
+          <option value="reword">Reword, same meaning</option>
+          <option value="changed">Change the facts</option>
+        </select>
+        <label for="repetitions" id="repetitions-label">Calls per model</label>
+        <select id="repetitions" disabled>
+          <option value="3">3</option>
+          <option value="5" selected>5</option>
+          <option value="10">10</option>
+        </select>
+      </div>
+      <p id="experiment-note" class="small" hidden></p>
+      <ol id="experiment-inputs" class="experiment-inputs" hidden></ol>
+      <details>
+        <summary>Category definitions</summary>
+        <dl id="category-definitions"></dl>
+      </details>
+      <div id="category-choices" class="category-choices" aria-label="Your prediction"></div>
+      <p id="prediction" class="small" role="status">Choose a category to make your own prediction, or go straight to the models.</p>
+      <div class="toolbar actions">
+        <button id="run" class="primary" disabled>Compare models</button>
+        <button id="stop" hidden>Stop after current calls</button>
+        <span id="call-count" class="small"></span>
+      </div>
+    </section>
+
+    <p id="run-status" role="status" class="run-status">Loading scenarios...</p>
+    <section class="comparison" aria-label="Model results">
+      <article class="model-card llm" data-model="openai">
+        <p class="eyebrow">General-purpose language model</p>
+        <h2>Asked for a category</h2>
+        <p class="model-name" data-field="name"></p>
+        <p class="answer" data-field="answer">Your prediction first?</p>
+        <p class="live" data-field="live" role="status"></p>
+        <dl class="metrics">
+          <div><dt data-metric="time">Response time</dt><dd data-field="time">Not run</dd></div>
+          <div><dt data-metric="agreement">Repeatability</dt><dd data-field="agreement">Not run</dd></div>
+        </dl>
+        <ol class="tiles" data-field="tiles" aria-label="Language model choices"></ol>
+        <section class="model-output" aria-label="Language model returned output">
+          <h3>What came back?</h3>
+          <label for="openai-call" class="small" data-field="inspect-label" hidden>Inspect a call</label>
+          <select id="openai-call" data-field="inspect" hidden disabled></select>
+          <p class="small" data-field="output-note">The timed request asks for a category only, not a written explanation.</p>
+          <p class="small" data-field="input"></p>
+          <pre class="returned-text" data-field="output">No response yet.</pre>
+          <details>
+            <summary>Returned response JSON</summary>
+            <p class="small">Decoded response body, not request headers or credentials. This is not a private reasoning trace.</p>
+            <pre data-field="response">No response yet.</pre>
+          </details>
+        </section>
+        <details class="measurement-details">
+          <summary>Tokens, cost and timing details</summary>
+          <p data-field="cost">No completed calls.</p>
+          <p data-field="tokens"></p>
+          <p data-field="timing"></p>
+        </details>
+      </article>
+      <article class="model-card decision" data-model="decision">
+        <p class="eyebrow">Microsoft Decision model</p>
+        <h2>Given a structured choice</h2>
+        <p class="model-name" data-field="name"></p>
+        <p class="answer" data-field="answer">Your prediction first?</p>
+        <p class="live" data-field="live" role="status"></p>
+        <dl class="metrics">
+          <div><dt data-metric="time">Response time</dt><dd data-field="time">Not run</dd></div>
+          <div><dt data-metric="agreement">Repeatability</dt><dd data-field="agreement">Not run</dd></div>
+        </dl>
+        <ol class="tiles" data-field="tiles" aria-label="Decision model choices"></ol>
+        <section class="model-output" aria-label="Decision model returned output">
+          <h3>What came back?</h3>
+          <label for="decision-call" class="small" data-field="inspect-label" hidden>Inspect a call</label>
+          <select id="decision-call" data-field="inspect" hidden disabled></select>
+          <p class="small" data-field="output-note">A structured answer, not a written rationale.</p>
+          <p class="small" data-field="input"></p>
+          <p class="small" data-field="confidence">No confidence reported yet.</p>
+          <ul class="probabilities" data-field="probabilities" aria-label="Reported category probabilities"></ul>
+          <p class="small" data-field="probability-note">No probabilities reported yet.</p>
+          <details>
+            <summary>Returned response JSON</summary>
+            <p class="small">Decoded response body, not request headers or credentials. This is not a private reasoning trace.</p>
+            <pre data-field="response">No response yet.</pre>
+          </details>
+        </section>
+        <details class="measurement-details">
+          <summary>Tokens, cost and timing details</summary>
+          <p data-field="cost">No completed calls.</p>
+          <p data-field="tokens"></p>
+          <p data-field="timing"></p>
+        </details>
+      </article>
+    </section>
+
+    <section id="explanation-section" class="discussion" hidden>
+      <h2>An answer is not an explanation</h2>
+      <p>An optional extra LLM call can generate a brief justification of its proposed category. This is <strong>not an internal reasoning trace</strong>, and may not faithfully explain how the original answer was reached.</p>
+      <p class="small">The timed comparison asks the LLM for a category only. Its short output does not show whether or how much it reasoned internally. Neither model's returned output reveals its full internal mechanism.</p>
+      <button id="explain" disabled>Ask the LLM to explain (1 extra call)</button>
+      <p id="explanation-status" role="status"></p>
+      <blockquote id="explanation" hidden></blockquote>
+      <p id="explanation-metrics" class="small"></p>
+      <details id="explanation-response" hidden>
+        <summary>Returned explanation response JSON (separate call)</summary>
+        <pre id="explanation-json"></pre>
+      </details>
+    </section>
+
+    <section class="discussion">
+      <h2 id="discussion-title">What counts as a good decision?</h2>
+      <p id="discussion-question">Is a quick answer better? Does a persuasive explanation make an answer more trustworthy?</p>
+      <p>These are model predictions, not established truths. A structured output is not necessarily correct, and a decision model is not necessarily a simple rule tree. Repeating an answer does not prove it is right.</p>
+    </section>
+  </main>
+  <footer>
+    <p>Default model settings; no artificial delays in real inference. Timings include server-to-model communication, not just computation. Cache state, service load and call order can affect results. Small classroom samples are not a benchmark.</p>
+    <p>USD cost estimates use reported usage and configured or recognised model prices, not your bill. Missing usage or prices are shown as unavailable. Failed calls may incur charges. Use fictional examples only; do not enter personal student information.</p>
+  </footer>
+</body>
+</html>

@@ -6,6 +6,167 @@ const vm = require('node:vm');
 const source = readFileSync(`${__dirname}/../static/app.js`, 'utf8')
   .replace(/^init\(\);$/m, '');
 
+const classroomSource = readFileSync(`${__dirname}/../static/classroom.js`, 'utf8')
+  .replace(/^init\(\);$/m, '');
+
+function classroomContext(values = {}) {
+  const context = vm.createContext({ location: { pathname: '/consistency' }, ...values });
+  vm.runInContext(classroomSource, context);
+  return context;
+}
+
+test('classroom metrics distinguish agreement from incomplete, invalid or failed runs', () => {
+  const result = (label, model_ms, cost_usd = 0.001) => ({
+    label, model_ms, cost_usd, valid: true, usage: { input_tokens: 10, output_tokens: 2 },
+  });
+  const context = classroomContext();
+  context.results = [result('IT', 30), result('IT', 10), result('Admissions', 20)];
+  let summary = vm.runInContext('summarise(results, 3)', context);
+  assert.equal(summary.agreement, 2 / 3);
+  assert.equal(summary.median, 20);
+  assert.equal(summary.tokens, 36);
+  assert.equal(summary.cost, 0.003);
+  assert.equal(summary.distinct, 2);
+
+  context.results.push({ error: 'Request failed' });
+  summary = vm.runInContext('summarise(results, 4)', context);
+  assert.equal(summary.agreement, null);
+  assert.equal(summary.complete, false);
+  assert.equal(summary.completed, 3);
+  context.results = [{ ...result('Unknown', 12), valid: false }];
+  assert.equal(vm.runInContext('summarise(results, 1).agreement', context), null);
+  assert.equal(vm.runInContext('summarise([], 5).median', context), null);
+});
+
+test('classroom cost and token totals never substitute zero for missing measurements', () => {
+  const context = classroomContext({
+    results: [
+      { label: 'IT', model_ms: 10, valid: true, cost_usd: 0.001, usage: { input_tokens: 5, output_tokens: 1 } },
+      { label: 'IT', model_ms: 14, valid: true, cost_usd: null, usage: null },
+    ],
+  });
+  const summary = vm.runInContext('summarise(results, 2)', context);
+  assert.equal(summary.cost, null);
+  assert.equal(summary.tokens, null);
+  assert.equal(summary.median, 12);
+  assert.equal(summary.agreement, 1);
+});
+
+test('classroom experiment plans separate exact repeats, rewording and changed facts', () => {
+  const fields = {
+    '#example': { value: '0' }, '#experiment': { value: 'repeat' },
+    '#repetitions': { value: '5' }, '#enquiry': { value: 'Custom enquiry' },
+  };
+  const context = classroomContext({ document: { querySelector: (selector) => fields[selector] } });
+  assert.deepEqual(Array.from(vm.runInContext('plannedTexts()', context)), Array(5).fill('Custom enquiry'));
+  fields['#experiment'].value = 'reword';
+  const reworded = Array.from(vm.runInContext('plannedTexts()', context));
+  assert.equal(reworded.length, 3);
+  assert.equal(new Set(reworded).size, 3);
+  fields['#experiment'].value = 'changed';
+  const changed = Array.from(vm.runInContext('plannedTexts()', context));
+  assert.equal(changed.length, 2);
+  assert.equal(changed[0], reworded[0]);
+  assert.notEqual(changed[1], reworded[1]);
+});
+
+test('classroom renders repeatability separately from changed-fact and simulated results', () => {
+  const fields = {};
+  const panel = {
+    querySelector(selector) {
+      return fields[selector] ??= { textContent: '' };
+    },
+  };
+  const context = classroomContext({ document: { querySelector: () => panel } });
+  vm.runInContext(`state.config = {mock: false};
+    state.results.openai = [
+      {label: 'IT', model_ms: 10, browser_ms: 15, valid: true, cost_usd: 0.000001, usage: {input_tokens: 10, output_tokens: 2}},
+      {label: 'IT', model_ms: 30, browser_ms: 35, valid: true, cost_usd: 0.000001, usage: {input_tokens: 10, output_tokens: 2}},
+      {label: 'Admissions', model_ms: 20, browser_ms: 25, valid: true, cost_usd: 0.000001, usage: {input_tokens: 10, output_tokens: 2}}
+    ];
+    renderMetrics('openai', {texts: ['a','a','a'], mode: 'repeat'});`, context);
+  assert.equal(fields['[data-field="agreement"]'].textContent, '67%');
+  assert.equal(fields['[data-field="time"]'].textContent, '0.020 s');
+  assert.match(fields['[data-field="cost"]'].textContent, /\$0\.00000300/);
+  vm.runInContext(`renderMetrics('openai', {texts: ['a','b','c'], mode: 'changed'})`, context);
+  assert.equal(fields['[data-field="agreement"]'].textContent, '2');
+  vm.runInContext(`state.config.mock = true;
+    renderMetrics('openai', {texts: ['a','a','a'], mode: 'repeat'});`, context);
+  assert.equal(fields['[data-field="agreement"]'].textContent, 'Simulation only');
+  assert.match(fields['[data-field="time"]'].textContent, /simulated/);
+});
+
+function outputContext() {
+  const fields = {};
+  function element() {
+    return {
+      textContent: '', children: [], attributes: {},
+      set innerHTML(value) { throw new Error('Model outputs must never be rendered as HTML.'); },
+      setAttribute(name, value) { this.attributes[name] = value; },
+      append(...children) { this.children.push(...children); },
+      replaceChildren(...children) { this.children = children; },
+    };
+  }
+  const panel = { querySelector: (selector) => fields[selector] ??= element() };
+  const context = classroomContext({
+    document: { querySelector: () => panel, createElement: element },
+  });
+  vm.runInContext(`state.config = {mock: false}; state.snapshot = {texts: ['First enquiry', 'Second enquiry']};`, context);
+  return { context, fields };
+}
+
+test('returned LLM text and response JSON remain complete plain text for each call', () => {
+  const { context, fields } = outputContext();
+  const output = 'Label: IT Support\n<img src=x onerror=alert(1)> Full returned wording.';
+  context.output = output;
+  vm.runInContext(`state.results.openai = [
+    {label:'IT Support', model_output:output, model_response:{choices:[{message:{content:output}}], usage:{total_tokens:12}}},
+    {label:'Admissions', model_output:'A different answer', model_response:{choices:[{message:{content:'A different answer'}}]}}
+  ]; renderOutput('openai', 0);`, context);
+  assert.equal(fields['[data-field="output"]'].textContent, output);
+  const response = JSON.parse(fields['[data-field="response"]'].textContent);
+  assert.equal(response.choices[0].message.content, output);
+  assert.equal(response.usage.total_tokens, 12);
+  vm.runInContext(`renderOutput('openai', 1)`, context);
+  assert.equal(fields['[data-field="output"]'].textContent, 'A different answer');
+  assert.equal(fields['[data-field="input"]'].textContent, 'Input 2: Second enquiry');
+});
+
+test('Decision bars use returned probabilities, preserve zero, and separate confidence', () => {
+  const { context, fields } = outputContext();
+  vm.runInContext(`state.results.decision = [{
+    label:'IT Support', confidence:0.1,
+    probabilities:[{label:'Admissions',probability:0},{label:'IT Support',probability:0.7}],
+    model_response:{answers:{category:{choice:'it_support',probabilities:{admissions:0,it_support:0.7},confidence:0.1}}}
+  }]; renderOutput('decision', 0);`, context);
+  const rows = fields['[data-field="probabilities"]'].children;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].children[1].value, 0);
+  assert.equal(rows[0].children[2].textContent, '0%');
+  assert.equal(rows[1].children[1].value, 0.7);
+  assert.equal(rows[1].children[2].textContent, '70%');
+  assert.match(fields['[data-field="confidence"]'].textContent, /10%/);
+  assert.match(fields['[data-field="probability-note"]'].textContent, /not rescaled/);
+});
+
+test('missing, invalid and simulated distributions never become fabricated bars', () => {
+  const { context, fields } = outputContext();
+  vm.runInContext(`state.results.decision = [{
+    confidence:0.9, probabilities:null, probabilities_unavailable_reason:'The model declined to decide.'
+  }]; renderOutput('decision', 0);`, context);
+  assert.equal(fields['[data-field="probabilities"]'].children.length, 0);
+  assert.match(fields['[data-field="probability-note"]'].textContent, /declined/);
+  vm.runInContext(`state.results.decision[0].probabilities = [{label:'IT',probability:1.2}];
+    renderOutput('decision', 0);`, context);
+  assert.equal(fields['[data-field="probabilities"]'].children.length, 0);
+  assert.match(fields['[data-field="probability-note"]'].textContent, /Invalid probability/);
+  vm.runInContext(`state.config.mock = true;
+    state.results.decision[0].probabilities = [{label:'IT',probability:0.9}];
+    renderOutput('decision', 0);`, context);
+  assert.equal(fields['[data-field="probabilities"]'].children.length, 0);
+  assert.match(fields['[data-field="probability-note"]'].textContent, /Simulation only/);
+});
+
 function setup(fetch) {
   const fields = {};
   function element() {

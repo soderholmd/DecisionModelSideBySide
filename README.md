@@ -37,6 +37,61 @@ Do not upload real patient details or identifiable police records to this demo.
 Labels can be added and removed in the UI before a run; **Reset to defaults** (or switching scenarios) restores the defaults.
 `data.config` files contain one item per line; blank lines and lines starting with `#` are ignored, so you can edit them freely.
 
+## Classroom presentations
+
+The original dashboard at `/` remains available as **Under the hood**. Navigation
+links lead to two simpler views designed for non-technical audiences:
+
+- **One decision** (`/compare`): choose a scenario and a single example, optionally
+  edit the text and predict a category, then send the same text and category
+  definitions to both models in parallel. Large result cards show their choices
+  and response times. Token counts and estimated USD costs are tucked away in
+  expandable details. An optional extra LLM call generates a short public-facing
+  justification, with its own time, usage and cost kept separate from classification.
+  It is **not an internal reasoning trace** and need not faithfully explain the
+  original prediction.
+- **Does it stick?** (`/consistency`): use curated student enquiries to repeat
+  exactly (3, 5 or 10 calls per model), reword the same request, or change the facts.
+  Each model runs its calls sequentially while both sides run concurrently.
+  Numbered category tiles expose variation rather than hiding it in an average.
+  Exact-repeat agreement is the proportion returning the most frequent category;
+  rewording agreement is labelled separately. Changed-fact experiments report the
+  number of distinct categories, not an accuracy or repeatability score.
+
+Both classroom pages include **What came back?**:
+
+- The LLM's complete returned text is shown before the app matches it to a
+  category. The timed request asks only for a category; this short answer does
+  not reveal whether or how much the model reasoned internally.
+- Decision's returned per-category probabilities appear as labelled bars,
+  without rescaling or inventing missing values. Reported confidence is displayed
+  separately; neither field is a guarantee of correctness or an explanation.
+  Missing, incomplete or invalid probabilities and refusals are identified
+  explicitly. Mock mode never invents an API response or probability distribution.
+- Expand **Returned response JSON** to inspect the full decoded SDK/API response
+  body, including returned usage and other response fields. Request headers,
+  credentials and access tokens are not included. Outputs are rendered as text,
+  not HTML. In repeatability experiments, select a call to inspect its input and
+  output rather than seeing only the final response.
+- The optional generated justification has its own response JSON and separate
+  measurements. It is not private chain of thought. These views expose observable
+  responses, not the models' full internal decision-making mechanisms.
+
+Nothing runs automatically. The screen states the planned call count before
+each experiment; **Stop after current calls** prevents further requests without
+claiming to cancel work already running. A failed, stopped or invalid-category run
+is marked incomplete and receives no agreement score. Median timings use received
+responses, and costs cover only completed responses with known prices and usage.
+Failed calls can still incur charges.
+
+Both views preserve the configured models and their default generation settings;
+there are no artificial delays in real inference or settings chosen to favour
+one model. Timing includes server-to-model communication, not just computation.
+Service load, caching and order can affect observations. Repeatability is not
+correctness, small samples are not a benchmark, and token counts do not measure
+thought. Mock mode is prominently labelled as a keyword-based simulation and
+does not present real-model repeatability scores.
+
 ## Setup
 
 Prerequisites: Python 3.10+, an Azure OpenAI chat deployment, and a Microsoft-Decision-1 deployment in a Microsoft Foundry resource.

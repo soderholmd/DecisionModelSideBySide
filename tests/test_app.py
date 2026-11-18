@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from openai.types.chat import ChatCompletion
 
 import classifiers
 import app as app_module
@@ -24,6 +25,20 @@ LABELS = [
 ]
 
 
+def chat_completion(content, usage=None, refusal=None):
+    return ChatCompletion.model_validate({
+        "id": "test-response",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "gpt-6.1-sol-2026-09-29",
+        "choices": [{
+            "index": 0, "finish_reason": "stop",
+            "message": {"role": "assistant", "content": content, "refusal": refusal},
+        }],
+        "usage": usage,
+    })
+
+
 @pytest.mark.parametrize("key", list(SCENARIOS))
 def test_scenarios_have_data_and_labels(key):
     scenario = SCENARIOS[key]
@@ -41,6 +56,117 @@ def test_config_and_data_endpoints(client):
         assert response.status_code == 200
         assert response.get_json()["items"]
     assert client.get("/api/data/nope").status_code == 404
+
+
+@pytest.mark.parametrize("path", ["/compare", "/consistency"])
+def test_classroom_pages_and_original_dashboard(client, path):
+    response = client.get(path)
+    assert response.status_code == 200
+    assert b'/static/classroom.js' in response.data
+    assert b'not an internal reasoning trace' in response.data
+    assert b'/static/app.js' in client.get("/").data
+
+
+@pytest.mark.parametrize("body", [
+    [],
+    {"text": "Question", "labels": []},
+    {"text": "", "labels": LABELS, "label": "Other"},
+    {"text": "Question", "labels": LABELS, "label": "Not a category"},
+])
+def test_explanation_rejects_invalid_input(client, body):
+    assert client.post("/api/explain", json=body).status_code == 400
+
+
+def test_explanation_is_separate_from_classification(monkeypatch, client):
+    monkeypatch.setenv("MOCK_MODELS", "true")
+    response = client.post(
+        "/api/explain", json={"text": "Needs help", "labels": LABELS, "label": "Technical Support"},
+    )
+    result = response.get_json()
+    assert response.status_code == 200
+    assert "Simulated explanation" in result["explanation"]
+    assert "label" not in result
+    assert result["cost_usd"] is None
+    assert "chain of thought" in result["prompt"]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_explanation_shares_capacity_and_reports_failure(monkeypatch, client, caplog, fails):
+    monkeypatch.setenv("MOCK_MODELS", "true")
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(app_module, "_batch_slots", slots)
+
+    def generate(text, labels, selected_label):
+        assert text == "Needs help"
+        assert labels == LABELS
+        assert selected_label == "Technical Support"
+        assert not slots.acquire(blocking=False)
+        with app.test_client() as other_client:
+            response = other_client.post(
+                "/api/explain", json={"text": text, "labels": labels, "label": selected_label},
+            )
+            assert response.status_code == 429
+            assert other_client.get("/healthz").status_code == 200
+        if fails:
+            raise RuntimeError("private upstream error")
+        return {"explanation": "A public-facing justification.", "model_ms": 4}
+
+    monkeypatch.setattr(app_module, "explain_openai", generate)
+    response = client.post(
+        "/api/explain", json={"text": "Needs help", "labels": LABELS, "label": "Technical Support"},
+    )
+    assert response.status_code == (502 if fails else 200)
+    assert slots.acquire(blocking=False)
+    slots.release()
+    if fails:
+        assert "private upstream error" not in response.get_data(as_text=True)
+        assert "Classification failed" in caplog.text
+
+
+def test_explanation_uses_separate_chat_request_and_actual_usage(monkeypatch):
+    monkeypatch.delenv("MOCK_MODELS", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "demo-model")
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return chat_completion(
+            "The request asks for help with a fault.",
+            {"prompt_tokens": 80, "completion_tokens": 12, "total_tokens": 92},
+        )
+
+    monkeypatch.setattr(
+        classifiers, "_openai_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+    )
+    result = classifiers.explain_openai("Needs help", LABELS, "Technical Support")
+    assert result["explanation"] == "The request asks for help with a fault."
+    assert result["model_response"]["choices"][0]["message"]["content"] == result["explanation"]
+    assert result["usage"]["output_tokens"] == 12
+    assert result["cost_usd"] == pytest.approx((80 * 2 + 12 * 10) / 1_000_000)
+    assert set(calls[0]) == {"model", "messages"}
+    supplied = json.loads(calls[0]["messages"][1]["content"])
+    assert supplied["proposed_category"] == "Technical Support"
+    assert supplied["categories"] == LABELS
+    assert "at most two sentences" in calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("answer", [None, "", "   "])
+def test_explanation_with_no_generated_text_is_a_logged_failure(monkeypatch, client, caplog, answer):
+    monkeypatch.delenv("MOCK_MODELS", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "demo-model")
+    response = chat_completion(answer)
+    monkeypatch.setattr(
+        classifiers, "_openai_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: response))),
+    )
+    result = client.post(
+        "/api/explain", json={"text": "Needs help", "labels": LABELS, "label": "Technical Support"},
+    )
+    assert result.status_code == 502
+    assert "explanation" not in result.get_json()
+    assert "Classification failed" in caplog.text
 
 
 @pytest.mark.parametrize("scenario", list(SCENARIOS))
@@ -146,14 +272,12 @@ def test_classify_openai_uses_model_default_temperature(monkeypatch, client):
     def fake_create(**kwargs):
         assert "temperature" not in kwargs
         calls.append(kwargs)
-        return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="Technical Support"))],
-            model="gpt-6.1-sol-2026-09-29",
-            usage=SimpleNamespace(
-                prompt_tokens=100,
-                completion_tokens=25,
-                prompt_tokens_details=SimpleNamespace(cached_tokens=20, cache_write_tokens=0),
-            ),
+        return chat_completion(
+            "Label: Technical Support\n",
+            {
+                "prompt_tokens": 100, "completion_tokens": 25, "total_tokens": 125,
+                "prompt_tokens_details": {"cached_tokens": 20, "cache_write_tokens": 0},
+            },
         )
 
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
@@ -162,6 +286,9 @@ def test_classify_openai_uses_model_default_temperature(monkeypatch, client):
     data = resp.get_json()
     assert resp.status_code == 200
     assert data["label"] == "Technical Support"
+    assert data["model_output"] == "Label: Technical Support\n"
+    assert data["model_response"]["choices"][0]["message"]["content"] == data["model_output"]
+    assert "test-key" not in json.dumps(data["model_response"])
     assert data["model_ms"] >= 0
     assert data["usage"]["input_tokens"] == 100
     assert data["usage"]["output_tokens"] == 25
@@ -171,6 +298,21 @@ def test_classify_openai_uses_model_default_temperature(monkeypatch, client):
         "model": "my-reasoning-deployment",
         "messages": classifiers.build_openai_messages("Needs help", LABELS),
     }]
+
+
+def test_llm_refusal_is_preserved_instead_of_matched_to_a_category(monkeypatch, client):
+    monkeypatch.delenv("MOCK_MODELS", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/")
+    monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT", "demo-model")
+    response = chat_completion(None, refusal="I cannot provide a Technical Support classification.")
+    monkeypatch.setattr(
+        classifiers, "_openai_client",
+        lambda: SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kwargs: response))),
+    )
+    result = client.post("/api/classify/openai", json={"text": "Question", "labels": LABELS}).get_json()
+    assert result["label"] == "(refused)"
+    assert result["model_output"] == response.choices[0].message.refusal
+    assert result["model_response"]["choices"][0]["message"]["refusal"] == result["model_output"]
 
 
 def test_label_keys_are_unique_identifiers():
@@ -208,7 +350,10 @@ def test_classify_decision_calls_endpoint(monkeypatch, client):
 
         def json(self):
             return {
-                "answers": {"category": {"choice": "sales_new_purchase", "confidence": 0.8}},
+                "answers": {"category": {
+                    "type": "choice", "choice": "sales_new_purchase", "confidence": 0.6,
+                    "probabilities": {"sales_new_purchase": 0.8, "technical_support": 0.15, "other": 0.05},
+                }},
                 "model": "microsoft-decision-1",
                 "usage": {"input_tokens": 100, "output_tokens": 1},
             }
@@ -222,6 +367,15 @@ def test_classify_decision_calls_endpoint(monkeypatch, client):
     data = resp.get_json()
     assert resp.status_code == 200
     assert data["label"] == "Sales - New Purchase"
+    assert data["confidence"] == 0.6
+    assert data["probabilities"] == [
+        {"label": "Sales - New Purchase", "probability": 0.8},
+        {"label": "Technical Support", "probability": 0.15},
+        {"label": "Other", "probability": 0.05},
+    ]
+    assert data["probabilities_unavailable_reason"] is None
+    assert data["model_response"]["answers"]["category"]["probabilities"]["sales_new_purchase"] == 0.8
+    assert "test-key" not in json.dumps(data["model_response"])
     assert data["model_ms"] >= 0
     assert data["usage"] == {"input_tokens": 100, "output_tokens": 1}
     assert data["cost_usd"] == pytest.approx(101 * 0.042 / 1_000_000)
@@ -239,6 +393,51 @@ def test_classify_validation_and_mock(monkeypatch, client):
     assert "Respond with only the label name" in data["prompt"]
     assert data["cost_usd"] is None
     assert "Mock" in data["cost_unavailable_reason"]
+    assert data["model_response"] is None
+    assert data["model_output"] == data["label"]
+    data = client.post("/api/classify/decision", json={"text": "Needs help", "labels": LABELS}).get_json()
+    assert data["probabilities"] is None
+    assert data["confidence"] is None
+    assert data["model_response"] is None
+    assert "Simulation" in data["probabilities_unavailable_reason"]
+
+
+@pytest.mark.parametrize("probabilities,reason", [
+    (None, "did not return"),
+    ({}, "did not return"),
+    ({"other": 1.0}, "exactly the requested"),
+    ({"other": 0.0, "technical_support": 0.5, "sales_new_purchase": 0.4, "unknown": 0.1}, "exactly the requested"),
+    ({"other": True, "technical_support": 0.0, "sales_new_purchase": 0.0}, "invalid probability"),
+    ({"other": -0.1, "technical_support": 0.5, "sales_new_purchase": 0.6}, "invalid probability"),
+    ({"other": 1.1, "technical_support": 0.0, "sales_new_purchase": 0.0}, "invalid probability"),
+    ({"other": float("nan"), "technical_support": 0.0, "sales_new_purchase": 0.0}, "invalid probability"),
+])
+def test_unavailable_probabilities_are_explicit_not_fabricated(probabilities, reason):
+    response = {"answers": {"category": {"type": "choice", "probabilities": probabilities}}}
+    rows, unavailable = classifiers.decision_probabilities(response, classifiers.label_keys(LABELS))
+    assert rows is None
+    assert reason in unavailable
+
+
+def test_probability_mapping_preserves_zero_small_values_and_colliding_label_keys():
+    keys = classifiers.label_keys([{"name": "Other"}, {"name": "Other!"}, {"name": "Support"}])
+    response = {"answers": {"category": {
+        "probabilities": {"other": 0, "other_2": 0.000001, "support": 0.999999},
+    }}}
+    rows, unavailable = classifiers.decision_probabilities(response, keys)
+    assert unavailable is None
+    assert rows == [
+        {"label": "Other", "probability": 0},
+        {"label": "Other!", "probability": 0.000001},
+        {"label": "Support", "probability": 0.999999},
+    ]
+
+
+def test_decision_refusal_does_not_display_probabilities():
+    response = {"answers": {"category": {"type": "refusal", "probabilities": {"other": 1}}}}
+    rows, reason = classifiers.decision_probabilities(response, classifiers.label_keys(LABELS))
+    assert rows is None
+    assert "declined" in reason
 
 
 def test_missing_configuration_is_reported(monkeypatch, client):

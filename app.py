@@ -15,6 +15,7 @@ from classifiers import (  # noqa: E402
     CLASSIFIERS,
     build_decision_request,
     build_openai_messages,
+    explain_openai,
     format_openai_prompt,
     missing_settings,
     mock_enabled,
@@ -44,6 +45,12 @@ def request_too_large(_error):
 @app.get("/")
 def index():
     return send_from_directory(app.static_folder, "index.html")
+
+
+@app.get("/compare")
+@app.get("/consistency")
+def classroom():
+    return send_from_directory(app.static_folder, "classroom.html")
 
 
 @app.get("/api/config")
@@ -123,13 +130,32 @@ def classify(model):
         return jsonify({"error": error}), 400
     if not text or not labels:
         return jsonify({"error": "Both 'text' and at least one label are required."}), 400
+    return _model_call(model, CLASSIFIERS[model], text, labels)
+
+
+@app.post("/api/explain")
+def explain():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "The request body must be a JSON object."}), 400
+    labels, error = validate_labels(body.get("labels", []))
+    if error:
+        return jsonify({"error": error}), 400
+    text = str(body.get("text", "")).strip()
+    selected_label = body.get("label")
+    if not text or selected_label not in [label["name"] for label in labels]:
+        return jsonify({"error": "Text and a label from the supplied categories are required."}), 400
+    return _model_call("openai", explain_openai, text, labels, selected_label)
+
+
+def _model_call(model, function, *args):
     missing = missing_settings(model)
     if missing:
         return jsonify({"error": f"Missing configuration: set {', '.join(missing)} in your .env file."}), 500
     if not _batch_slots.acquire(blocking=False):
         return jsonify({"error": "Too many model requests are running. Retry shortly."}), 429, {"Retry-After": "5"}
     try:
-        return jsonify(CLASSIFIERS[model](text, labels))
+        return jsonify(function(*args))
     except Exception as exc:  # details go to the server log, not the browser
         app.logger.exception("Classification failed")
         status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
