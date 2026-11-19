@@ -5,13 +5,14 @@ param(
     [switch]$Resume,
     [switch]$RecoverWebCredential,
     [string]$ResumeImageTag = '',
-    [string]$SubscriptionId = '3e94f9bc-043d-427d-9d85-26a3e8174b37',
+    [string]$SubscriptionId = '',
     [string]$ParametersFile = (Join-Path $PSScriptRoot 'main.parameters.json')
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $auditPath = $null
+if ([string]::IsNullOrWhiteSpace($SubscriptionId)) { throw 'Specify -SubscriptionId explicitly. No Azure operations were attempted.' }
 if (($Resume -or $RecoverWebCredential) -and !$Deploy) { throw 'Resume and credential recovery require -Deploy.' }
 if ($RecoverWebCredential -and !$Resume) { throw 'Credential recovery requires -Resume and separate approval.' }
 if ($Resume -and $ResumeImageTag -notmatch '^demo:[0-9]+$') { throw 'Resume requires an existing -ResumeImageTag such as demo:1795022709.' }

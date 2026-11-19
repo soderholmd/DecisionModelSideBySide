@@ -4,10 +4,11 @@ Set-StrictMode -Version Latest
 
 $root = Split-Path $PSScriptRoot -Parent
 $deployScript = Join-Path $root 'infra\deploy.ps1'
-$parameters = Get-Content (Join-Path $root 'infra\main.parameters.json') -Raw | ConvertFrom-Json -AsHashtable
+$parameters = Get-Content (Join-Path $root 'infra\main.parameters.example.json') -Raw | ConvertFrom-Json -AsHashtable
 $parameters.parameters.exemptionExpiresOn.value = [DateTimeOffset]::UtcNow.AddDays(30).ToString('o')
 $tenant = $parameters.parameters.tenantId.value
 $allowedUser = $parameters.parameters.allowedUserObjectId.value
+$testSubscriptionId = '00000000-0000-0000-0000-000000000002'
 $global:decisionInfraTest = @{
     user = $allowedUser
     calls = [Collections.Generic.List[object]]::new()
@@ -23,6 +24,9 @@ function Assert-True {
 function az {
     param([Parameter(ValueFromRemainingArguments)][string[]]$CliArguments)
     $global:decisionInfraTest.calls.Add($CliArguments)
+    if ($CliArguments -contains '--subscription') {
+        Assert-True ($CliArguments[[Array]::IndexOf($CliArguments, '--subscription') + 1] -eq $testSubscriptionId) 'The explicit subscription was not preserved.'
+    }
     $global:LASTEXITCODE = 0
     switch ($CliArguments[0..1] -join ' ') {
         'account show' { @{ tenantId = $tenant } | ConvertTo-Json }
@@ -40,9 +44,19 @@ function az {
 }
 
 try {
+    foreach ($arguments in @(@{}, @{ SubscriptionId = '   ' })) {
+        $rejected = $false
+        try { & $deployScript @arguments }
+        catch {
+            if ($_.Exception.Message -notlike 'Specify -SubscriptionId explicitly.*') { throw }
+            $rejected = $true
+        }
+        Assert-True $rejected 'A missing or blank subscription was accepted.'
+        Assert-True ($global:decisionInfraTest.calls.Count -eq 0) 'Azure was called without an explicit subscription.'
+    }
     $parameterFile = Join-Path $temporary 'parameters.json'
     $parameters | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $parameterFile -Encoding utf8
-    $preview = & $deployScript -ParametersFile $parameterFile
+    $preview = & $deployScript -SubscriptionId $testSubscriptionId -ParametersFile $parameterFile
     Assert-True ($preview.status -eq 'WhatIfOnly') 'Preview did not complete.'
     Assert-True (!(Test-Path -LiteralPath $preview.parameterPath)) 'Temporary deployment parameters were not removed.'
     Assert-True ($global:decisionInfraTest.calls.Count -eq 4) 'Unexpected operations were performed by the preview.'
@@ -50,7 +64,7 @@ try {
     $global:decisionInfraTest.calls.Clear()
     $global:decisionInfraTest.user = 'not-the-approved-user'
     $rejected = $false
-    try { & $deployScript -ParametersFile $parameterFile -Deploy }
+    try { & $deployScript -SubscriptionId $testSubscriptionId -ParametersFile $parameterFile -Deploy }
     catch {
         if ($_.Exception.Message -notlike '*identity does not match*') { throw }
         $rejected = $true
@@ -177,7 +191,7 @@ try {
     Assert-True (!$appParameters.parameters.externalIngress.value) 'Initial app deployment is not internal.'
     Assert-True ($appParameters.parameters.environmentId.value -eq '/test/environment') 'App deployment lost its foundation wiring.'
     Assert-True ($appParameters.parameters.webClientSecret.value -eq 'test-only-secret') 'Secure file transport lost the credential.'
-    'Passed: preview/identity/auth gates, exact credential recovery and app-only secure deployment wiring.'
+    'Passed: explicit subscription requirement/forwarding, preview/identity/auth gates, exact credential recovery and app-only secure deployment wiring.'
 } finally {
     Remove-Item -LiteralPath $temporary -Recurse -Force
     Remove-Variable -Name decisionInfraTest -Scope Global

@@ -168,14 +168,14 @@ Bicep installed. The preview uses illustrative application/image values; it
 does not create resources, a directory application, or credentials:
 
 ```powershell
-pwsh -File .\infra\deploy.ps1
+pwsh -File .\infra\deploy.ps1 -SubscriptionId "<your-subscription-id>"
 ```
 
 Only after reviewing the target, costs, and policy exemption scope, explicitly
 request provisioning:
 
 ```powershell
-pwsh -File .\infra\deploy.ps1 -Deploy
+pwsh -File .\infra\deploy.ps1 -SubscriptionId "<your-subscription-id>" -Deploy
 ```
 
 Provisioning builds the runtime-only Docker context in ACR, deploys the real
@@ -196,7 +196,7 @@ reapply the policy waiver or model resources. To resume an unchanged successful
 foundation with an already-built image:
 
 ```powershell
-pwsh -File .\infra\deploy.ps1 -Deploy -Resume -ResumeImageTag demo:1795022709
+pwsh -File .\infra\deploy.ps1 -SubscriptionId "<your-subscription-id>" -Deploy -Resume -ResumeImageTag demo:1795022709
 ```
 
 Resume verifies the foundation template fingerprint, target parameters and
@@ -212,7 +212,8 @@ deployment session state and private key files are ignored by Git. Keep them
 local; do not force-add them. Commit `infra/main.parameters.example.json`
 instead. For a fresh checkout, copy that example to `infra/main.parameters.json`
 and replace every placeholder with reviewed, approved values. Pass your
-subscription explicitly with `-SubscriptionId`; do not reuse another
+subscription explicitly with `-SubscriptionId`; the script has no subscription
+default and rejects missing or blank values before calling Azure. Do not reuse another
 environment's identifiers or extend an existing waiver on a retry.
 
 Review the nonsecret infrastructure parameters before using this path in
